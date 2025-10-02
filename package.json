@@ -1,0 +1,41 @@
+{
+  "name": "BTT",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "pm2 start src/index.js --name btt && pm2 logs",
+    "flush": "pm2 flush && pm2 delete btt",
+    "stop": "pm2 stop btt",
+    "delete": "pm2 delete btt",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@binance/connector": "^3.6.1",
+    "axios": "^1.12.2",
+    "big.js": "^6.1.1",
+    "ccxt": "^4.5.4",
+    "dotenv": "^17.2.2",
+    "gate-api": "^7.1.8",
+    "lowdb": "^2.0.2",
+    "luxon": "^3.7.2",
+    "nodemon": "^3.1.10",
+    "path": "^0.12.7",
+    "telegraf": "^4.16.3",
+    "telegraf-session-local": "^2.1.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "eslint": "^9.35.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2"
+  },
+  "author": "",
+  "license": "ISC"
+}
