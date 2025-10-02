@@ -18,12 +18,12 @@ export class DatabaseLocal {
     async _initDefault() {
         this.db.data = {
             operationData: {
-                averageSellPrice: 0,
-                sellCount: 0,
+                averageBuyPrice: 0,
+                buy: 0,
                 amount: 0,
                 fee: 0,
             },
-            successfullyClosed: [],
+            successfullyClosed: 0,
         };
         await this.db.write();
     }
@@ -31,32 +31,33 @@ export class DatabaseLocal {
     async setData(quantity, price, fee = 0) {
         if (!quantity || !price || quantity <= 0 || price <= 0) return null;
 
-        const { sellCount = 0, amount = 0, fee: currentFee = 0 } = this.db.data.operationData;
+        const { buy = 0, amount = 0, fee: currentFee = 0 } = this.db.data.operationData;
 
-        const sellCountBig = new Big(sellCount);
+        const buyBig = new Big(buy);
         const amountBig = new Big(amount);
         const feeBig = new Big(currentFee);
 
-        const newSellCount = sellCountBig.plus(new Big(quantity).times(new Big(price)));
+        const newbuy = buyBig.plus(new Big(quantity).times(new Big(price)));
         const newAmount = amountBig.plus(new Big(quantity));
         const newFee = feeBig.plus(new Big(fee));
 
-        this.db.data.operationData.sellCount = newSellCount.toNumber();
+        this.db.data.operationData.buy = newbuy.toNumber();
         this.db.data.operationData.amount = newAmount.toNumber();
-        this.db.data.operationData.fee = newFee.toNumber().toFixed(6);
-        this.db.data.operationData.averageSellPrice = newAmount.gt(0) ? newSellCount.div(newAmount).toNumber() : 0;
+        this.db.data.operationData.fee = newFee.toNumber();
+        this.db.data.operationData.averageBuyPrice = newAmount.gt(0) ? newbuy.div(newAmount).toNumber() : 0;
 
         await this.db.write();
     }
 
-    async updateData() {
+    async updateData(profit) {
         this.db.data.operationData = {
-            averageSellPrice: 0,
-            sellCount: 0,
+            averageBuyPrice: 0,
+            buy: 0,
             amount: 0,
             fee: 0,
         };
 
+        this.db.data.successfullyClosed += profit;
         await this.db.write();
     }
 

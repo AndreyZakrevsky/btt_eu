@@ -4,7 +4,6 @@ import 'dotenv/config';
 import { DatabaseLocal } from './services/localDb.service.js';
 import { Telegraf, Markup } from 'telegraf';
 
-const EXCHANGE_FEE = 0.998;
 const EXCHANGE_FEE_PERCENT = 0.002;
 
 export class BinanceTrader {
@@ -23,9 +22,9 @@ export class BinanceTrader {
         this.tg_bot = new Telegraf(process.env.TG_TOKEN);
         this.dbService = new DatabaseLocal();
 
-        this.market = `${tradeConfig.base}/${tradeConfig.asset}`;
-        this.averageSellPrice = 0;
-        this.sellAmount = 0;
+        this.market = `${tradeConfig.asset}/${tradeConfig.base}`;
+        this.averageBuyPrice = 0;
+        this.buyAmount = 0;
         this.tickCount = 0;
         this.trading = false;
         this.currentPrice = null;
@@ -47,75 +46,55 @@ export class BinanceTrader {
     }
 
     async _trade() {
-        const baseBalance = await this._getBaseBalance();
-        const { averageSellPrice = 0, amount = 0, fee = 0 } = await this.dbService.getData();
-
-        this.averageSellPrice = averageSellPrice;
-        this.sellAmount = amount;
+        const { averageBuyPrice = 0, amount = 0, fee = 0 } = await this.dbService.getData();
+        this.averageBuyPrice = averageBuyPrice;
+        this.buyAmount = amount;
         this.fee = fee;
         this.currentPrice = await this._getLastMarketPrice();
 
         if (!this.currentPrice || !this.trading) return;
 
-        if (averageSellPrice === 0) {
-            return await this._sell(this.configTrade.sellStepInUsdt);
+        if (averageBuyPrice === 0) {
+            return await this._buy(this.configTrade.buyStepInEuro);
         }
 
-        // const priceDifference = new Big(this.currentPrice).minus(new Big(this.averageSellPrice)).toNumber();
+        const priceDifference = new Big(this.currentPrice).minus(new Big(this.averageBuyPrice)).toNumber();
 
-        // if (priceDifference > 0 && this.sellAmount < this.limitBase) {
-        //     if (this.averageSellPrice + this.sellClearance < this.currentPrice && baseBalance > this.configTrade.sellStepInUsdt) {
-        //         return await this._sell(this.configTrade.sellStepInUsdt);
-        //     }
-        // }
+        if (priceDifference > 0 && this.buyAmount < this.limitBase) {
+            if (this.averageBuyPrice + this.sellClearance < this.currentPrice) {
+                return await this._sell(this.buyAmount);
+            }
+        }
 
-        // if (priceDifference < 0) {
-        //     if (this.averageSellPrice - this.buyClearance >= this.currentPrice) {
-        //         return await this._buy(this.sellAmount);
-        //     }
-        // }
+        if (priceDifference < 0) {
+            if (this.averageBuyPrice - this.buyClearance >= this.currentPrice) {
+                return await this._buy(this.configTrade.buyStepInEuro);
+            }
+        }
     }
 
-    async finishBuying() {
-        const profit = this.getCurrentProfit();
+    async finishSelling() {
+        const profit = await this.getCurrentProfit();
 
         await this.dbService.updateData(profit);
     }
 
-    getCurrentProfit() {
+    async getCurrentProfit() {
         if (!this.currentPrice) return 0;
 
-        const sellAmount = new Big(this.sellAmount);
+        const { fee = 0 } = await this.dbService.getData();
+        const buyAmount = new Big(this.buyAmount);
         const currentPrice = new Big(this.currentPrice);
-        const averageSellPrice = new Big(this.averageSellPrice);
+        const averageBuyPrice = new Big(this.averageBuyPrice);
 
-        return averageSellPrice.minus(currentPrice).times(sellAmount).div(currentPrice).times(EXCHANGE_FEE).toFixed(5);
-    }
-
-    test() {
-        const sellRate = 42.535;
-        const buyRate = 42.44;
-
-        const sums = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
-
-        sums.forEach((amount) => {
-            const selling = amount * sellRate;
-            const buying = amount * buyRate;
-            const profitBeforeCommission = selling - buying;
-
-            const netProfit = (profitBeforeCommission / sellRate) * EXCHANGE_FEE;
-            const netProfitUA = profitBeforeCommission * EXCHANGE_FEE;
-            console.log(`Сума: $${amount}, Чистий прибуток: $${netProfit.toFixed(2)} (${netProfitUA} UAH)`);
-        });
+        return currentPrice.minus(averageBuyPrice).times(buyAmount).minus(fee).toFixed(5);
     }
 
     async _sell(amount) {
         try {
-            const { status, price } = await this.binanceClient.createMarketSellOrder(this.market, amount);
+            const { status } = await this.binanceClient.createMarketSellOrder(this.market, amount);
 
-            if (status === 'closed') {
-                await this.dbService.setData(amount, price, amount * EXCHANGE_FEE_PERCENT);
-            }
+            if (status === 'closed') await this.finishSelling();
         } catch (e) {
             console.log(`❌ SELL ERROR: ${e.message}`);
         }
@@ -123,8 +102,9 @@ export class BinanceTrader {
 
     async _buy(amount) {
         try {
-            const { status } = await this.binanceClient.createMarketBuyOrder(this.market, amount);
-            if (status === 'closed') await this.finishBuying();
+            const { status, price } = await this.binanceClient.createMarketBuyOrder(this.market, amount);
+
+            if (status === 'closed') await this.dbService.setData(amount, price, amount * EXCHANGE_FEE_PERCENT);
         } catch (e) {
             console.log(`❌ BUY ERROR: ${e.message}`);
         }
@@ -201,16 +181,16 @@ export class BinanceTrader {
 
         this.tg_bot.hears('Status', async (ctx) => {
             const operationData = await this.dbService.getData();
-            const { sellCount = 0, amount = 0, fee = 0, averageSellPrice = 0 } = operationData || {};
-            const profit = this.getCurrentProfit();
-            const awaitingSell = this.averageSellPrice + this.sellClearance;
-            const awaitingBuy = this.averageSellPrice - this.buyClearance;
+            const { buy = 0, amount = 0, fee = 0, averageBuyPrice = 0 } = operationData || {};
+            const profit = await this.getCurrentProfit();
+            const awaitingSell = this.averageBuyPrice + this.sellClearance;
+            const awaitingBuy = this.averageBuyPrice - this.buyClearance;
 
             const extendedInfo = `
 Status ${this.market}: ${this.trading ? '✅ Running' : '🛑 Stopped'}
 Current Market Price: ${this.currentPrice || 0}
-Average Sell Price: ${averageSellPrice}
-Sell Count: ${sellCount}
+Average Buy Price: ${averageBuyPrice}
+Buy Count: ${buy}
 Amount Sold: ${amount}
 Fee: ${fee}
 Limit: ${this.limitBase}
@@ -257,7 +237,7 @@ AWAITING TO BUY:   [${this.buyClearance}]  ${awaitingBuy?.toFixed(4)} `;
 
             if (limit || buy || sell) {
                 this.isTrading = false;
-                ctx.reply('✅ You changed configuration, the bot is stopped. Run bot to start trading with new percentage.');
+                ctx.reply('✅ You changed configuration!!!');
             }
         });
     }
