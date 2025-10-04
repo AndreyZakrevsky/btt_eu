@@ -1,15 +1,15 @@
 {
-  "name": "BTT",
+  "name": "BTT EU",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "pm2 start src/index.js --name btt && pm2 logs",
-    "flush": "pm2 flush && pm2 delete btt",
-    "stop": "pm2 stop btt",
-    "delete": "pm2 delete btt",
+    "start": "pm2 start src/index.js --name btt_eu && pm2 logs",
+    "flush": "pm2 flush && pm2 delete btt_eu",
+    "stop": "pm2 stop btt_eu",
+    "delete": "pm2 delete btt_eu",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
