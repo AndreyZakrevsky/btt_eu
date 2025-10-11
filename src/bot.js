@@ -119,6 +119,9 @@ export class BinanceTrader {
 
     async _buy(amount) {
         try {
+            const baseBalance = await this._getBaseBalance();
+            if (baseBalance < this.step * 1.5) return;
+
             const { status, price } = await this.binanceClient.createMarketBuyOrder(this.market, amount);
 
             if (status === 'closed') await this.dbService.setData(amount, price, amount * EXCHANGE_FEE_PERCENT);
