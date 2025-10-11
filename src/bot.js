@@ -14,7 +14,7 @@ export class BinanceTrader {
             options: { adjustForTimeDifference: true },
         });
 
-        this.volume = Number(tradeConfig.buyStepInEuro);
+        this.step = Number(tradeConfig.buyStepInEuro);
         this.maxVolume = Number(tradeConfig.limitBase);
         this.sellClearance = Number(tradeConfig.clearanceSell);
         this.buyClearance = Number(tradeConfig.clearanceBuy);
@@ -22,14 +22,16 @@ export class BinanceTrader {
 
         this.tg_bot = new Telegraf(process.env.TG_TOKEN);
         this.dbService = new DatabaseLocal();
+        this.sellBuffer = 0.0005;
 
         this.market = `${tradeConfig.asset}/${tradeConfig.base}`;
         this.averageBuyPrice = 0;
         this.buyAmount = 0;
         this.tickCount = 0;
-        this.trading = false;
+        this.isTrading = false;
         this.currentPrice = null;
         this.fee = 0;
+        this.interval = this.configTrade.tickInterval;
 
         this._setupBotInterface();
 
@@ -39,8 +41,8 @@ export class BinanceTrader {
     }
 
     async tick() {
-        while (this.trading) {
-            await this._sleep(this.configTrade.tickInterval);
+        while (this.isTrading) {
+            await this._sleep(this.interval);
             await this._trade();
             this.tickCount += 1;
         }
@@ -53,24 +55,38 @@ export class BinanceTrader {
         this.fee = fee;
         this.currentPrice = await this._getLastMarketPrice();
 
-        if (!this.currentPrice || !this.trading) return;
-
-        if (averageBuyPrice === 0) {
-            return await this._buy(this.volume);
-        }
+        if (!this.currentPrice || !this.isTrading) return;
+        if (averageBuyPrice === 0) return await this._buy(this.step);
 
         const priceDifference = new Big(this.currentPrice).minus(new Big(this.averageBuyPrice)).toNumber();
 
         if (priceDifference > 0 && this.buyAmount < this.maxVolume) {
-            if (this.averageBuyPrice + this.sellClearance < this.currentPrice) {
+            const canSell = await this._canSellWithFlexibility();
+            if (this.averageBuyPrice + this.sellClearance < this.currentPrice && canSell) {
                 return await this._sell(this.buyAmount);
             }
         }
 
         if (priceDifference < 0) {
             if (this.averageBuyPrice - this.buyClearance >= this.currentPrice) {
-                return await this._buy(this.volume);
+                return await this._buy(this.step);
             }
+        }
+    }
+
+    async _canSellWithFlexibility() {
+        try {
+            const orderBook = await this.binanceClient.fetchOrderBook(this.market);
+            const bids = orderBook.bids.slice(0, 20);
+
+            const filteredBids = bids.filter(([orderPrice]) => orderPrice >= this.averageBuyPrice - this.sellBuffer);
+
+            const totalVolume = filteredBids.reduce((acc, [, orderAmount]) => acc + orderAmount, 0);
+
+            return totalVolume >= this.buyAmount;
+        } catch (error) {
+            console.error('Error in canSellWithFlexibility:', error);
+            return false;
         }
     }
 
@@ -162,21 +178,21 @@ export class BinanceTrader {
         });
 
         this.tg_bot.hears('Start Trading', async (ctx) => {
-            if (this.trading) {
+            if (this.isTrading) {
                 return ctx.reply('❗ Trading is already running.');
             }
 
-            this.trading = true;
+            this.isTrading = true;
             ctx.reply('✅ Trading has started!');
             this.tick();
         });
 
         this.tg_bot.hears('Stop Trading', async (ctx) => {
-            if (!this.trading) {
+            if (!this.isTrading) {
                 return ctx.reply('❗ Trading is already stopped.');
             }
 
-            this.trading = false;
+            this.isTrading = false;
             ctx.reply('🛑 Trading has stopped!');
         });
 
@@ -188,16 +204,19 @@ export class BinanceTrader {
             const awaitingBuy = this.averageBuyPrice - this.buyClearance;
 
             const extendedInfo = `
-Status ${this.market}: ${this.trading ? '✅ Running' : '🛑 Stopped'}
+Status ${this.market}: ${this.isTrading ? '✅ Running' : '🛑 Stopped'}
 Current price (USDT): ${this.currentPrice || 0}
-Average price (USDT): ${averageBuyPrice}
 
+Average price (USDT): ${averageBuyPrice}
 Total spent (USDT): ${buy}
 Total (EUR): ${amount}
 Fee: ${fee}
-Step: ${this.volume}
+Profit (USDT): ${profit}
+
+Step: ${this.step}
 Limit: ${this.maxVolume}
-Profit: ${profit}
+Sell buffer: ${this.sellBuffer}
+Interval (sec): ${this.interval / 1000}
 
 AWAITING TO SELL:  [${this.sellClearance}]  ${awaitingSell?.toFixed(4)}
 AWAITING TO BUY:   [${this.buyClearance}]  ${awaitingBuy?.toFixed(4)} `;
@@ -222,27 +241,58 @@ AWAITING TO BUY:   [${this.buyClearance}]  ${awaitingBuy?.toFixed(4)} `;
         });
 
         this.tg_bot.command('set', async (ctx) => {
-            const text = ctx.message.text;
-            const params = text.split(' ').slice(1);
-            const {
-                buy = null,
-                sell = null,
-                volume = null,
-                max_volume = null,
-            } = params.reduce((acc, param) => {
-                const [key, value] = param.split('=');
-                acc[key] = value;
-                return acc;
-            }, {});
+            try {
+                const text = ctx.message.text;
+                const params = text
+                    .split(' ')
+                    .slice(1)
+                    .reduce((acc, param) => {
+                        const [key, value] = param.split('=');
+                        acc[key] = parseFloat(value);
+                        return acc;
+                    }, {});
 
-            this.sellClearance = Number(sell) || this.sellClearance;
-            this.buyClearance = Number(buy) || this.buyClearance;
-            this.maxVolume = Number(max_volume) || this.maxVolume;
-            this.volume = Number(volume) || this.volume;
+                let shouldRestart = false;
 
-            if (volume || buy || sell || max_volume) {
+                if (!isNaN(params.sell)) {
+                    this.sellClearance = params.sell;
+                    shouldRestart = true;
+                }
+
+                if (!isNaN(params.interval)) {
+                    this.interval = params.interval * 1000;
+                    shouldRestart = true;
+                }
+
+                if (!isNaN(params.buy)) {
+                    this.buyClearance = params.buy;
+                    shouldRestart = true;
+                }
+
+                if (!isNaN(params.limit)) {
+                    this.maxVolume = params.limit;
+                    shouldRestart = true;
+                }
+
+                if (!isNaN(params.step)) {
+                    this.step = params.step;
+                    shouldRestart = true;
+                }
+
+                if (!isNaN(params.buffer)) {
+                    this.bufferAsk = params.buffer;
+                    shouldRestart = true;
+                }
+
+                if (!shouldRestart) {
+                    return ctx.reply('❗ No valid parameters provided. Valid parameters: sell, buy, limit, step, buffer. All values ​​must be numeric');
+                }
+
                 this.isTrading = false;
-                ctx.reply('✅ You changed configuration!!!');
+                ctx.reply(`✅ Configuration updated. The bot is stopped. Restart it to apply changes.`);
+            } catch (error) {
+                console.error('Error in set command:', error);
+                ctx.reply('❌ An error occurred while processing your command. Please try again.');
             }
         });
     }
