@@ -21,7 +21,7 @@ export class BinanceTrader {
         this.configTrade = tradeConfig;
 
         this.tg_bot = new Telegraf(process.env.TG_TOKEN);
-        this.dbService = new DatabaseLocal();
+        this.dbService = new DatabaseLocal(tradeConfig.asset);
         this.sellBuffer = 0.0005;
 
         this.market = `${tradeConfig.asset}/${tradeConfig.base}`;

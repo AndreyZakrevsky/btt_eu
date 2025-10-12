@@ -1,15 +1,14 @@
 {
-  "name": "BTTEU",
+  "name": "BNTB",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "pm2 start src/index.js --name btt_eu && pm2 logs",
-    "flush": "pm2 flush && pm2 delete btt_eu",
-    "stop": "pm2 stop btt_eu",
-    "delete": "pm2 delete btt_eu",
+    "start": "pm2 start ecosystem.config.cjs && pm2 logs",
+    "stop": "pm2 stop all",
+    "delete": "pm2 delete all && sleep 2 && rm -rf ~/.pm2/logs/*",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
