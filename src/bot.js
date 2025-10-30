@@ -27,7 +27,6 @@ export class BinanceTrader {
         this.market = `${tradeConfig.asset}/${tradeConfig.base}`;
         this.averageBuyPrice = 0;
         this.buyAmount = 0;
-        this.tickCount = 0;
         this.isTrading = false;
         this.currentPrice = null;
         this.fee = 0;
@@ -41,10 +40,13 @@ export class BinanceTrader {
     }
 
     async tick() {
-        while (this.isTrading) {
-            await this._sleep(this.interval);
-            await this._trade();
-            this.tickCount += 1;
+        try {
+            while (this.isTrading) {
+                await this._sleep(this.interval);
+                await this._trade();
+            }
+        } catch {
+            this.isTrading = false;
         }
     }
 
