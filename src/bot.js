@@ -4,8 +4,6 @@ import 'dotenv/config';
 import { DatabaseLocal } from './services/localDb.service.js';
 import { Telegraf, Markup } from 'telegraf';
 
-const EXCHANGE_FEE_PERCENT = 0.002;
-
 export class BinanceTrader {
     constructor(tradeConfig) {
         this.binanceClient = new ccxt.binance({
@@ -29,7 +27,6 @@ export class BinanceTrader {
         this.buyAmount = 0;
         this.isTrading = false;
         this.currentPrice = null;
-        this.fee = 0;
         this.interval = this.configTrade.tickInterval;
 
         this._setupBotInterface();
@@ -51,10 +48,9 @@ export class BinanceTrader {
     }
 
     async _trade() {
-        const { averageBuyPrice = 0, amount = 0, fee = 0 } = await this.dbService.getData();
+        const { averageBuyPrice = 0, amount = 0 } = await this.dbService.getData();
         this.averageBuyPrice = averageBuyPrice;
         this.buyAmount = amount;
-        this.fee = fee;
         this.currentPrice = await this._getLastMarketPrice();
 
         if (!this.currentPrice || !this.isTrading) return;
@@ -92,28 +88,21 @@ export class BinanceTrader {
         }
     }
 
-    async finishSelling() {
-        const profit = await this.getCurrentProfit();
-
-        await this.dbService.updateData(profit);
-    }
-
     async getCurrentProfit() {
         if (!this.currentPrice) return 0;
 
-        const { fee = 0 } = await this.dbService.getData();
         const buyAmount = new Big(this.buyAmount);
         const currentPrice = new Big(this.currentPrice);
         const averageBuyPrice = new Big(this.averageBuyPrice);
 
-        return currentPrice.minus(averageBuyPrice).times(buyAmount).minus(fee).toFixed(5);
+        return currentPrice.minus(averageBuyPrice).times(buyAmount).toFixed(5);
     }
 
     async _sell(amount) {
         try {
             const { status } = await this.binanceClient.createMarketSellOrder(this.market, amount);
 
-            if (status === 'closed') await this.finishSelling();
+            if (status === 'closed') await this.dbService.cleanUp();
         } catch (e) {
             console.log(`❌ SELL ERROR: ${e.message}`);
         }
@@ -126,7 +115,7 @@ export class BinanceTrader {
 
             const { status, price } = await this.binanceClient.createMarketBuyOrder(this.market, amount);
 
-            if (status === 'closed') await this.dbService.setData(amount, price, amount * EXCHANGE_FEE_PERCENT);
+            if (status === 'closed') await this.dbService.setData(amount, price);
         } catch (e) {
             console.log(`❌ BUY ERROR: ${e.message}`);
         }
@@ -203,7 +192,7 @@ export class BinanceTrader {
 
         this.tg_bot.hears('Status', async (ctx) => {
             const operationData = await this.dbService.getData();
-            const { buy = 0, amount = 0, fee = 0, averageBuyPrice = 0 } = operationData || {};
+            const { buy = 0, amount = 0, averageBuyPrice = 0 } = operationData || {};
             const profit = await this.getCurrentProfit();
             const awaitingSell = this.averageBuyPrice + this.sellClearance;
             const awaitingBuy = this.averageBuyPrice - this.buyClearance;
@@ -215,7 +204,6 @@ Current price (USDT): ${this.currentPrice || 0}
 Average price (USDT): ${averageBuyPrice}
 Total spent (USDT): ${buy}
 Total (EUR): ${amount}
-Fee: ${fee}
 Profit (USDT): ${profit}
 
 Step: ${this.step}
